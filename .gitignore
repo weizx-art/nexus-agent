@@ -1,0 +1,16 @@
+.venv/
+.idea/
+.vscode/
+*.egg-info/
+__pycache__/
+.playwright-mcp/
+Thumbs.db
+*.pyc
+*.pyo
+*.log
+*.swp
+*.swo
+.env
+.DS_Store
+.idea
+.vscode
