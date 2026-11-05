@@ -216,3 +216,15 @@ class DocumentService:
             select(func.coalesce(func.sum(Segment.hit_count), 0)).where(Segment.document_id == document_id)
         )).scalar() or 0
         return {"segment_count": seg_count, "hit_count": hit_count}
+
+    async def batch_doc_stats(self, document_ids: list[str]) -> dict[str, dict]:
+        q = select(
+            Segment.document_id,
+            func.count(Segment.id).label("seg_count"),
+            func.coalesce(func.sum(Segment.hit_count), 0).label("hit_count"),
+        ).where(Segment.document_id.in_(document_ids)).group_by(Segment.document_id)
+        rows = (await self.db.execute(q)).all()
+        stats = {doc_id: {"segment_count": 0, "hit_count": 0} for doc_id in document_ids}
+        for doc_id, seg_count, hit_count in rows:
+            stats[doc_id] = {"segment_count": seg_count, "hit_count": hit_count}
+        return stats

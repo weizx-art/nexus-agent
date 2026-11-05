@@ -24,6 +24,18 @@ from services.segment_service import SegmentService
 router = APIRouter(prefix="/datasets", tags=["知识库"])
 
 
+def _sanitize_error(error: str | None) -> str:
+    """清理错误信息，避免暴露内部细节"""
+    if not error:
+        return ""
+    error_lower = error.lower()
+    if any(kw in error_lower for kw in ("timeout", "连接", "网络", "服务")):
+        return "处理超时，请稍后重试"
+    if any(kw in error_lower for kw in ("格式错误", "解析失败", "内容无效")):
+        return error
+    return "处理失败，请检查文件内容或联系管理员"
+
+
 def _dataset_out(ds, stats: dict) -> dict:
     return DatasetOut(
         id=str(ds.id), name=ds.name, icon=ds.icon, description=ds.description,
@@ -36,7 +48,7 @@ def _document_out(doc, stats: dict) -> dict:
         id=str(doc.id), dataset_id=str(doc.dataset_id), name=doc.name,
         position=doc.position, character_count=doc.character_count,
         token_count=doc.token_count, enabled=doc.enabled,
-        disabled_at=doc.disabled_at, status=doc.status, error=doc.error,
+        disabled_at=doc.disabled_at, status=doc.status, error=_sanitize_error(doc.error),
         created_at=doc.created_at, updated_at=doc.updated_at, **stats,
     ).model_dump()
 
@@ -49,7 +61,7 @@ def _segment_out(seg: Segment) -> dict:
         character_count=seg.character_count, token_count=seg.token_count,
         hit_count=seg.hit_count, hash=seg.hash or "",
         enabled=seg.enabled, disabled_at=seg.disabled_at,
-        status=seg.status, error=seg.error or "",
+        status=seg.status, error=_sanitize_error(seg.error),
         created_at=seg.created_at, updated_at=seg.updated_at,
     ).model_dump()
 
@@ -65,7 +77,8 @@ async def list_datasets(
 ):
     svc = DatasetService(db)
     page = await svc.list_datasets(account.id, current_page, page_size, search_keyword)
-    data = [_dataset_out(d, await svc.dataset_stats(str(d.id))) for d in page.items]
+    all_stats = await svc.batch_dataset_stats([str(d.id) for d in page.items])
+    data = [_dataset_out(d, all_stats[str(d.id)]) for d in page.items]
     return success_json({"list": data, "paginator": page.paginator.model_dump()})
 
 
@@ -118,7 +131,8 @@ async def list_documents(
 ):
     svc = DocumentService(db)
     page = await svc.list_documents(account.id, dataset_id, current_page, page_size, search_keyword)
-    data = [_document_out(d, await svc.doc_stats(str(d.id))) for d in page.items]
+    all_stats = await svc.batch_doc_stats([str(d.id) for d in page.items])
+    data = [_document_out(d, all_stats[str(d.id)]) for d in page.items]
     return success_json({"list": data, "paginator": page.paginator.model_dump()})
 
 
@@ -147,7 +161,7 @@ async def documents_status(dataset_id: str, batch: str, account: Account = Depen
     return success_json([
         DocumentStatusItem(
             id=str(d.id), name=d.name, status=d.status, enabled=d.enabled,
-            error=d.error or "",
+            error=_sanitize_error(d.error),
             processing_started_at=d.processing_started_at,
             parsing_completed_at=d.parsing_completed_at,
             splitting_completed_at=d.splitting_completed_at,

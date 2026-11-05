@@ -1,5 +1,6 @@
 from datetime import datetime
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import auto_commit
 from utils.exception import FailException
@@ -23,8 +24,11 @@ class AccountService:
             raise FailException("该用户名已被注册")
         salt, hashed = generate_password_salt_and_hash(password)
         account = Account(username=username, name=name or username, password_salt=salt, password=hashed)
-        async with auto_commit(self.db):
-            self.db.add(account)
+        try:
+            async with auto_commit(self.db):
+                self.db.add(account)
+        except IntegrityError:
+            raise FailException("该用户名已被注册")
         await self.db.refresh(account)
         return account
 

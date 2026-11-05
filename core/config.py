@@ -53,5 +53,14 @@ class Settings(BaseSettings):
             return ["*"]
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
+    def validate_production(self):
+        """生产环境安全校验，启动时调用"""
+        insecure_keys = {
+            "change-me-in-production",
+            "please-change-this-to-a-random-string",
+        }
+        if self.JWT_SECRET_KEY in insecure_keys:
+            raise RuntimeError("JWT_SECRET_KEY 使用默认值，请在 .env 中设置安全的随机密钥")
+
 
 settings = Settings()

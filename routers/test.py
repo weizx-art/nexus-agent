@@ -25,9 +25,9 @@ async def health_check():
         async with AsyncSessionLocal() as db:
             await db.execute(text("SELECT 1"))
         status["checks"]["database"] = "connected"
-    except Exception as e:
-        logger.error("数据库健康检查失败: %s", e)
-        status["checks"]["database"] = f"error: {str(e)}"
+    except Exception:
+        logger.error("数据库健康检查失败", exc_info=True)
+        status["checks"]["database"] = "disconnected"
         status["status"] = "unhealthy"
     
     # 检查 Redis
@@ -35,9 +35,9 @@ async def health_check():
         redis = await get_redis()
         await redis.ping()
         status["checks"]["redis"] = "connected"
-    except Exception as e:
-        logger.error("Redis 健康检查失败: %s", e)
-        status["checks"]["redis"] = f"error: {str(e)}"
+    except Exception:
+        logger.error("Redis 健康检查失败", exc_info=True)
+        status["checks"]["redis"] = "disconnected"
         status["status"] = "unhealthy"
     
     return {"code": "success", "message": "", "data": status}

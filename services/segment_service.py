@@ -124,8 +124,8 @@ class SegmentService:
                             await KeywordTableService(self.db).add_keyword_table_from_ids(
                                 str(dataset_id), [str(seg.id)]
                             )
-            except SQLAlchemyError:
-                logger.exception("创建文档片段失败")
+            except (SQLAlchemyError, WeaviateBaseError) as e:
+                logger.exception("创建文档片段失败: %s", e)
                 if seg and seg.id:
                     async with auto_commit(self.db):
                         seg.error = str(e)[:500]

@@ -68,7 +68,48 @@ class EmbeddingService:
 
     @classmethod
     async def embed_documents(cls, texts: list[str]) -> tuple[Any]:
-        return await asyncio.gather(*[cls._embed_cached(t) for t in texts])
+        """批量向量化，优先使用模型的 batch 编码"""
+        if not texts:
+            return ()
+
+        r = await get_redis()
+        keys = [cls._cache_key(t) for t in texts]
+
+        cached_vectors: dict[int, list[float]] = {}
+        uncached_indices: list[int] = []
+        uncached_texts: list[str] = []
+
+        try:
+            cached_values = await r.mget(keys)
+            for i, val in enumerate(cached_values):
+                if val is not None:
+                    cached_vectors[i] = json.loads(val)
+                else:
+                    uncached_indices.append(i)
+                    uncached_texts.append(texts[i])
+        except RedisError:
+            uncached_indices = list(range(len(texts)))
+            uncached_texts = texts
+
+        if uncached_texts:
+            await asyncio.to_thread(cls._load)
+            new_vectors = await asyncio.to_thread(cls._embeddings.embed_documents, uncached_texts)
+
+            cache_pairs = {}
+            for idx, vec in zip(uncached_indices, new_vectors):
+                cached_vectors[idx] = vec
+                cache_pairs[keys[idx]] = json.dumps(vec)
+
+            try:
+                if cache_pairs:
+                    pipe = r.pipeline()
+                    for k, v in cache_pairs.items():
+                        pipe.set(k, v, ex=86400 * 7)
+                    await pipe.execute()
+            except RedisError:
+                logger.warning("Redis 批量缓存写入失败", exc_info=True)
+
+        return tuple(cached_vectors[i] for i in range(len(texts)))
 
     @staticmethod
     def count_tokens(text: str) -> int:

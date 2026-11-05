@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import DateTime, Index, String, Text, func
+from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from core.database import Base
@@ -11,6 +11,7 @@ class Dataset(Base):
 
     __tablename__ = "dataset"
     __table_args__ = (
+        UniqueConstraint("account_id", "name", name="uq_dataset_account_name"),
         Index("ix_dataset_account_id", "account_id"),
         Index("ix_dataset_created_at", "created_at"),
     )

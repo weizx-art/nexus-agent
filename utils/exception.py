@@ -75,5 +75,5 @@ def register_exception_handlers(app):
         logger.exception("未处理的异常: %s", exc)
         return JSONResponse(
             status_code=200,
-            content={"code": HttpCode.FAIL, "message": f"服务器内部错误: {str(exc)}", "data": {}},
+            content={"code": HttpCode.FAIL, "message": "服务器内部错误，请稍后重试", "data": {}},
         )

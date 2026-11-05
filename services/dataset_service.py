@@ -2,7 +2,7 @@ import logging
 from typing import Sequence
 
 from sqlalchemy import delete, desc, func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from weaviate.exceptions import WeaviateBaseError
 
@@ -30,13 +30,15 @@ class DatasetService:
         result = await self.db.execute(
             select(Dataset).where(Dataset.account_id == account_id, Dataset.name == req.name)
         )
-        exists = result.scalar_one_or_none()
-        if exists:
+        if result.scalar_one_or_none():
             raise ValidateErrorException(f"名称《{req.name}》已存在")
         description = req.description or DEFAULT_DATASET_DESCRIPTION.format(name=req.name)
         ds = Dataset(account_id=account_id, name=req.name, icon=req.icon, description=description)
-        async with auto_commit(self.db):
-            self.db.add(ds)
+        try:
+            async with auto_commit(self.db):
+                self.db.add(ds)
+        except IntegrityError:
+            raise ValidateErrorException(f"名称《{req.name}》已存在")
         return ds
 
     async def get_dataset(self, account_id, dataset_id) -> Dataset:
@@ -47,22 +49,25 @@ class DatasetService:
 
     async def update_dataset(self, account_id, dataset_id, req):
         ds = await self.get_dataset(account_id, dataset_id)
-        async with auto_commit(self.db):
-            if req.name is not None and req.name != ds.name:
-                result = await self.db.execute(
-                    select(Dataset).where(
-                        Dataset.account_id == account_id,
-                        Dataset.name == req.name,
-                        Dataset.id != dataset_id,
+        try:
+            async with auto_commit(self.db):
+                if req.name is not None and req.name != ds.name:
+                    result = await self.db.execute(
+                        select(Dataset).where(
+                            Dataset.account_id == account_id,
+                            Dataset.name == req.name,
+                            Dataset.id != dataset_id,
+                        )
                     )
-                )
-                if result.scalar_one_or_none():
-                    raise ValidateErrorException(f"名称《{req.name}》已存在")
-                ds.name = req.name
-            if req.icon is not None:
-                ds.icon = req.icon
-            if req.description is not None:
-                ds.description = req.description
+                    if result.scalar_one_or_none():
+                        raise ValidateErrorException(f"名称《{req.name}》已存在")
+                    ds.name = req.name
+                if req.icon is not None:
+                    ds.icon = req.icon
+                if req.description is not None:
+                    ds.description = req.description
+        except IntegrityError:
+            raise ValidateErrorException(f"名称《{req.name}》已存在")
 
     async def delete_dataset(self, account_id, dataset_id):
         ds = await self.get_dataset(account_id, dataset_id)
@@ -108,6 +113,30 @@ class DatasetService:
             select(func.coalesce(func.sum(Segment.hit_count), 0)).where(Segment.dataset_id == dataset_id)
         )).scalar() or 0
         return {"document_count": doc_count, "character_count": char_count, "hit_count": hit_count}
+
+    async def batch_dataset_stats(self, dataset_ids: list[str]) -> dict[str, dict]:
+        doc_q = select(
+            Document.dataset_id,
+            func.count(Document.id).label("doc_count"),
+            func.coalesce(func.sum(Document.character_count), 0).label("char_count"),
+        ).where(Document.dataset_id.in_(dataset_ids)).group_by(Document.dataset_id)
+        hit_q = select(
+            Segment.dataset_id,
+            func.coalesce(func.sum(Segment.hit_count), 0).label("hit_count"),
+        ).where(Segment.dataset_id.in_(dataset_ids)).group_by(Segment.dataset_id)
+
+        doc_rows = (await self.db.execute(doc_q)).all()
+        hit_rows = (await self.db.execute(hit_q)).all()
+
+        stats = {}
+        for ds_id, doc_count, char_count in doc_rows:
+            stats[ds_id] = {"document_count": doc_count, "character_count": char_count, "hit_count": 0}
+        for ds_id, hit_count in hit_rows:
+            stats.setdefault(ds_id, {"document_count": 0, "character_count": 0, "hit_count": 0})
+            stats[ds_id]["hit_count"] = hit_count
+        for ds_id in dataset_ids:
+            stats.setdefault(ds_id, {"document_count": 0, "character_count": 0, "hit_count": 0})
+        return stats
 
     # ---------- 召回测试 ----------
     async def hit(self, account_id, dataset_id, req) -> list[dict]:
@@ -171,18 +200,30 @@ class DatasetService:
 
     async def _enrich_hit_results(self, results: dict, dataset_id, query: str, k: int):
         """补全 segment 详情字段、累加 hit_count、记录查询"""
+        seg_ids = list(results.keys())
+        if not seg_ids:
+            return
+
         async with auto_commit(self.db):
-            for sid, r in list(results.items()):
-                seg = await self.db.get(Segment, sid)
-                if not seg:
+            stmt = (
+                select(Segment, Document.name)
+                .join(Document, Segment.document_id == Document.id)
+                .where(Segment.id.in_(seg_ids))
+            )
+            rows = (await self.db.execute(stmt)).all()
+            seg_map = {str(seg.id): (seg, doc_name) for seg, doc_name in rows}
+
+            for sid in seg_ids:
+                if sid not in seg_map:
                     results.pop(sid, None)
                     continue
-                doc = await self.db.get(Document, seg.document_id)
+                seg, doc_name = seg_map[sid]
+                r = results[sid]
                 r.update({
                     "segment_id": sid,
                     "content": seg.content,
                     "document_id": str(seg.document_id),
-                    "document_name": doc.name if doc else "",
+                    "document_name": doc_name or "",
                     "keywords": seg.keywords or [],
                     "character_count": seg.character_count,
                     "token_count": seg.token_count,

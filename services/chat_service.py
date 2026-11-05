@@ -17,6 +17,8 @@ from utils.exception import NotFoundException, ValidateErrorException
 
 logger = logging.getLogger(__name__)
 
+_background_tasks: set[asyncio.Task] = set()
+
 
 class ChatService:
     """对话服务"""
@@ -198,7 +200,9 @@ class ChatService:
             pass
 
         # 后台异步检查并更新摘要，不阻塞响应
-        asyncio.create_task(self._background_summarize(conversation_id))
+        task = asyncio.create_task(self._background_summarize(conversation_id))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return {
             "conversation_id": str(conversation_id),
@@ -233,25 +237,27 @@ class ChatService:
 
             await self.save_user_message(conversation_id, user_message)
             await self.db.commit()
-        except SQLAlchemyError as e:
-            logger.error("流式对话准备阶段异常: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
+        except SQLAlchemyError:
+            logger.error("流式对话准备阶段异常", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
             return
 
-        full_response = []
+        answer_parts = []
         try:
             async for sse_event in run_chat_stream(self.db, user_message, chat_history, dataset_ids, summary=summary):
-                full_response.append(sse_event)
                 yield sse_event
+                if sse_event.startswith("data: "):
+                    try:
+                        data = json.loads(sse_event[6:].strip())
+                        if data.get("type") == "token" and "content" in data:
+                            answer_parts.append(data["content"])
+                    except (json.JSONDecodeError, KeyError):
+                        pass
         except (ValueError, RuntimeError) as e:
             logger.error("流式对话生成阶段异常: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
 
-        answer = "".join(
-            json.loads(line.replace("data: ", "").strip()).get("content", "")
-            for line in full_response
-            if line.startswith("data: ") and '"type": "token"' in line
-        )
+        answer = "".join(answer_parts)
 
         if answer:
             try:
@@ -261,7 +267,9 @@ class ChatService:
                 logger.warning("保存助手消息失败", exc_info=True)
 
         # 后台异步检查并更新摘要
-        asyncio.create_task(self._background_summarize(conversation_id))
+        task = asyncio.create_task(self._background_summarize(conversation_id))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     # ---------- 私有方法 ----------
 

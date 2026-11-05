@@ -56,7 +56,7 @@ async def chat_completions_stream(
                 yield sse_data
         except (SQLAlchemyError, ValueError, RuntimeError) as e:
             logger.error("流式对话异常: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'content': '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

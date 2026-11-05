@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Optional
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from weaviate.exceptions import WeaviateBaseError
 
@@ -59,18 +60,24 @@ def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
             if not top_results:
                 return "未在知识库中找到相关内容。"
 
+            seg_ids = [uuid.UUID(r["segment_id"]) for r in top_results if r.get("segment_id")]
+            if not seg_ids:
+                return "未在知识库中找到相关内容。"
+
+            stmt = select(Segment, Document).join(Document, Segment.document_id == Document.id).where(Segment.id.in_(seg_ids))
+            result = await db.execute(stmt)
+            seg_doc_map = {seg.id: (seg, doc) for seg, doc in result.all()}
+
             segments = []
             for r in top_results:
                 seg_id = r.get("segment_id")
-                if seg_id:
-                    seg = await db.get(Segment, uuid.UUID(seg_id))
-                    if seg:
-                        doc = await db.get(Document, seg.document_id)
-                        segments.append({
-                            "content": seg.content,
-                            "source": doc.name if doc else "未知文档",
-                            "score": round(r.get("score", 0), 3),
-                        })
+                if seg_id and uuid.UUID(seg_id) in seg_doc_map:
+                    seg, doc = seg_doc_map[uuid.UUID(seg_id)]
+                    segments.append({
+                        "content": seg.content,
+                        "source": doc.name if doc else "未知文档",
+                        "score": round(r.get("score", 0), 3),
+                    })
 
             if not segments:
                 return "未在知识库中找到相关内容。"
