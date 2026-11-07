@@ -75,12 +75,16 @@ async def main():
     try:
         collection_name = "Dataset"
         client = VectorService.client()
+        logger.info("Weaviate 客户端已连接")
         if client.collections.exists(collection_name):
+            logger.info("删除现有集合...")
             client.collections.delete(collection_name)
+            logger.info("集合已删除")
+        logger.info("创建新集合...")
         VectorService._ensure_collection()
         logger.info("✓ Weaviate 集合已重建")
     except Exception as e:
-        logger.error(f"✗ Weaviate 操作失败: {e}")
+        logger.error(f"✗ Weaviate 操作失败: {e}", exc_info=True)
         return
 
     # 3. 创建管理员账号
@@ -141,10 +145,12 @@ async def main():
                 # 为每个文档创建 5 个片段
                 for seg_idx, seg_template in enumerate(SEGMENT_CONTENTS, 1):
                     seg_content = seg_template.format(doc_name=doc_name)
+                    node_id = uuid.uuid4()
                     segment = Segment(
                         account_id=admin.id,
                         dataset_id=dataset.id,
                         document_id=document.id,
+                        node_id=node_id,
                         position=seg_idx,
                         content=seg_content,
                         character_count=len(seg_content),
@@ -166,7 +172,7 @@ async def main():
                     try:
                         vector = await EmbeddingService.embed_query(seg_content)
                         await VectorService.add_segment(
-                            node_id=str(segment.id),
+                            node_id=str(node_id),
                             text=seg_content,
                             vector=vector,
                             props={

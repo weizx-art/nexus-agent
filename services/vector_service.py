@@ -29,21 +29,32 @@ class VectorService:
         if cls._client is None:
             with cls._lock:
                 if cls._client is None:
-                    host = settings.WEAVIATE_URL.replace("http://", "").split(":")[0]
+                    host = settings.WEAVIATE_URL.replace("http://", "").replace("https://", "").split(":")[0]
+                    logger.info("Weaviate 配置: URL=%s, host=%s", settings.WEAVIATE_URL, host)
                     auth = Auth.api_key(settings.WEAVIATE_API_KEY) if settings.WEAVIATE_API_KEY else None
                     
                     max_retries = 3
                     for attempt in range(max_retries):
                         try:
-                            cls._client = weaviate.connect_to_custom(
-                                http_host=host,
-                                http_port=8080,
-                                http_secure=False,
-                                grpc_host=host,
-                                grpc_port=50051,
-                                grpc_secure=False,
-                                auth_credentials=auth,
-                            )
+                            # 对于 localhost，使用 connect_to_local 避免端口解析问题
+                            if host in ("localhost", "127.0.0.1"):
+                                cls._client = weaviate.connect_to_local(
+                                    port=8080,
+                                    grpc_port=50051,
+                                    auth_credentials=auth,
+                                    skip_init_checks=True,
+                                )
+                            else:
+                                cls._client = weaviate.connect_to_custom(
+                                    http_host=host,
+                                    http_port=8080,
+                                    http_secure=False,
+                                    grpc_host=host,
+                                    grpc_port=50051,
+                                    grpc_secure=False,
+                                    auth_credentials=auth,
+                                    skip_init_checks=True,
+                                )
                             cls._ensure_collection()
                             logger.info("Weaviate 连接成功")
                             break

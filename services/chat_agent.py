@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """你是一个综合业务智能助手。你的职责是帮助用户解答问题、完成任务。
 
-当提供了知识库参考内容时，请优先基于这些参考信息来回答。如果参考信息不足以回答问题，你可以结合自身知识补充，但需要说明哪些内容来自知识库、哪些是你的补充。
+重要：当用户选择了知识库时，你必须首先使用 knowledge_retrieval 工具检索相关内容，然后基于检索结果回答。即使用户的问题比较模糊或简短，也要先尝试检索，而不是要求用户提供更多信息。
 
 回答要求：
 - 使用中文回答
+- 优先基于知识库检索结果回答，如果检索结果不足，可以结合自身知识补充
 - 条理清晰，必要时使用列表或分段
 - 如果无法确定答案，请如实告知，不要编造信息
 - 保持专业、友好的语气"""
@@ -34,8 +35,9 @@ def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
 
     @tool
     async def knowledge_retrieval(query: str) -> str:
-        """从知识库中检索与用户问题相关的内容。当需要查找专业知识、公司制度、操作规范等信息时调用此工具。"""
+        """从用户选择的知识库中检索相关内容。当有知识库可用时，必须调用此工具获取参考信息后再回答用户问题。"""
         try:
+            logger.info("知识库检索开始，query: %s, dataset_ids: %s", query[:100], dataset_ids)
             query_vector = await EmbeddingService.embed_query(query)
 
             # 并行检索多个知识库
@@ -50,14 +52,19 @@ def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
                 if isinstance(results, Exception):
                     logger.warning("知识库 %s 检索失败: %s", ds_id, results)
                     continue
+                logger.info("知识库 %s 检索到 %d 条结果", ds_id, len(results))
                 for r in results:
                     r["dataset_id"] = str(ds_id)
                 all_results.extend(results)
 
             all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
             top_results = all_results[:5]
+            
+            if top_results:
+                logger.info("Top结果分数: %s", [r.get("score") for r in top_results])
 
             if not top_results:
+                logger.info("知识库未找到相关内容")
                 return "未在知识库中找到相关内容。"
 
             seg_ids = [uuid.UUID(r["segment_id"]) for r in top_results if r.get("segment_id")]
@@ -80,8 +87,10 @@ def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
                     })
 
             if not segments:
+                logger.info("数据库未找到对应的分段记录")
                 return "未在知识库中找到相关内容。"
 
+            logger.info("最终返回 %d 条参考内容", len(segments))
             parts = []
             for i, s in enumerate(segments, 1):
                 parts.append(f"【参考{i}】来源: {s['source']}（相关度: {s['score']}）\n{s['content']}")

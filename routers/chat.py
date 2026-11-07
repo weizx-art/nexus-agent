@@ -12,6 +12,7 @@ from models import Account
 from schemas.chat import ChatReq
 from services.chat_service import ChatService
 from utils.deps import get_current_user
+from utils.exception import BusinessException
 from utils.response import success_json, success_message
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,10 @@ async def chat_completions_stream(
                 dataset_ids=req.dataset_ids,
             ):
                 yield sse_data
-        except (SQLAlchemyError, ValueError, RuntimeError) as e:
-            logger.error("流式对话异常: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
+        except (SQLAlchemyError, BusinessException, ValueError, RuntimeError) as e:
+            error_msg = e.message if isinstance(e, BusinessException) else str(e)
+            logger.error("流式对话异常: %s", error_msg, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': error_msg or '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

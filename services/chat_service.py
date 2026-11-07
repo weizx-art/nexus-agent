@@ -13,7 +13,7 @@ from core.database import auto_commit
 from models import Conversation, Dataset, Message
 from services.chat_agent import run_chat, run_chat_stream
 from services.summary_service import SummaryService, RECENT_TURNS
-from utils.exception import NotFoundException, ValidateErrorException
+from utils.exception import BusinessException, NotFoundException, ValidateErrorException
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +237,10 @@ class ChatService:
 
             await self.save_user_message(conversation_id, user_message)
             await self.db.commit()
-        except SQLAlchemyError:
-            logger.error("流式对话准备阶段异常", exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
+        except (SQLAlchemyError, BusinessException) as e:
+            error_msg = e.message if isinstance(e, BusinessException) else '服务异常，请稍后重试'
+            logger.error("流式对话准备阶段异常: %s", error_msg, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
             return
 
         answer_parts = []
@@ -253,9 +254,10 @@ class ChatService:
                             answer_parts.append(data["content"])
                     except (json.JSONDecodeError, KeyError):
                         pass
-        except (ValueError, RuntimeError) as e:
-            logger.error("流式对话生成阶段异常: %s", e, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': '服务异常，请稍后重试'}, ensure_ascii=False)}\n\n"
+        except (ValueError, RuntimeError, BusinessException) as e:
+            error_msg = e.message if isinstance(e, BusinessException) else '服务异常，请稍后重试'
+            logger.error("流式对话生成阶段异常: %s", error_msg, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
 
         answer = "".join(answer_parts)
 

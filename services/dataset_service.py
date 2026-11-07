@@ -115,25 +115,29 @@ class DatasetService:
         return {"document_count": doc_count, "character_count": char_count, "hit_count": hit_count}
 
     async def batch_dataset_stats(self, dataset_ids: list[str]) -> dict[str, dict]:
+        # 将字符串 ID 转换为 UUID 以匹配数据库类型
+        from uuid import UUID
+        uuid_ids = [UUID(ds_id) for ds_id in dataset_ids]
+        
         doc_q = select(
             Document.dataset_id,
             func.count(Document.id).label("doc_count"),
             func.coalesce(func.sum(Document.character_count), 0).label("char_count"),
-        ).where(Document.dataset_id.in_(dataset_ids)).group_by(Document.dataset_id)
+        ).where(Document.dataset_id.in_(uuid_ids)).group_by(Document.dataset_id)
         hit_q = select(
             Segment.dataset_id,
             func.coalesce(func.sum(Segment.hit_count), 0).label("hit_count"),
-        ).where(Segment.dataset_id.in_(dataset_ids)).group_by(Segment.dataset_id)
+        ).where(Segment.dataset_id.in_(uuid_ids)).group_by(Segment.dataset_id)
 
         doc_rows = (await self.db.execute(doc_q)).all()
         hit_rows = (await self.db.execute(hit_q)).all()
 
         stats = {}
         for ds_id, doc_count, char_count in doc_rows:
-            stats[ds_id] = {"document_count": doc_count, "character_count": char_count, "hit_count": 0}
+            stats[str(ds_id)] = {"document_count": doc_count, "character_count": char_count, "hit_count": 0}
         for ds_id, hit_count in hit_rows:
-            stats.setdefault(ds_id, {"document_count": 0, "character_count": 0, "hit_count": 0})
-            stats[ds_id]["hit_count"] = hit_count
+            stats.setdefault(str(ds_id), {"document_count": 0, "character_count": 0, "hit_count": 0})
+            stats[str(ds_id)]["hit_count"] = hit_count
         for ds_id in dataset_ids:
             stats.setdefault(ds_id, {"document_count": 0, "character_count": 0, "hit_count": 0})
         return stats
