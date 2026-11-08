@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import DateTime, Index, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
@@ -21,6 +21,7 @@ class Conversation(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="新对话")
+    dataset_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
     # 历史对话摘要：当对话轮次超过阈值时，早期消息会被压缩为摘要
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=func.now(), onupdate=func.now())

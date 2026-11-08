@@ -19,6 +19,7 @@ class ConversationOut(BaseModel):
     id: str
     title: str
     message_count: int = 0
+    dataset_ids: list[str] = []
     created_at: datetime
     updated_at: Optional[datetime] = None
 

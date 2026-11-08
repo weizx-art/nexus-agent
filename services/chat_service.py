@@ -28,8 +28,10 @@ class ChatService:
 
     # ---------- Conversation CRUD ----------
 
-    async def create_conversation(self, account_id: uuid.UUID, title: str = "新对话") -> Conversation:
-        conv = Conversation(account_id=account_id, title=title)
+    async def create_conversation(
+        self, account_id: uuid.UUID, title: str = "新对话", dataset_ids: list[str] | None = None
+    ) -> Conversation:
+        conv = Conversation(account_id=account_id, title=title, dataset_ids=dataset_ids)
         async with auto_commit(self.db):
             self.db.add(conv)
         return conv
@@ -75,6 +77,7 @@ class ChatService:
                 "id": str(conv.id),
                 "title": conv.title,
                 "message_count": msg_counts.get(conv.id, 0),
+                "dataset_ids": conv.dataset_ids or [],
                 "created_at": conv.created_at.isoformat(),
                 "updated_at": conv.updated_at.isoformat(),
             })
@@ -176,11 +179,13 @@ class ChatService:
         if dataset_ids:
             await self._validate_datasets(account_id, dataset_ids)
 
+        ds_id_strs = [str(d) for d in dataset_ids] if dataset_ids else None
         if conversation_id:
             conv = await self.get_conversation(account_id, conversation_id)
+            conv.dataset_ids = ds_id_strs
         else:
             title = user_message[:50] + ("..." if len(user_message) > 50 else "")
-            conv = await self.create_conversation(account_id, title)
+            conv = await self.create_conversation(account_id, title, ds_id_strs)
             conversation_id = conv.id
 
         summary, chat_history = await self.get_chat_history(conversation_id)
@@ -223,11 +228,13 @@ class ChatService:
             if dataset_ids:
                 await self._validate_datasets(account_id, dataset_ids)
 
+            ds_id_strs = [str(d) for d in dataset_ids] if dataset_ids else None
             if conversation_id:
                 conv = await self.get_conversation(account_id, conversation_id)
+                conv.dataset_ids = ds_id_strs
             else:
                 title = user_message[:50] + ("..." if len(user_message) > 50 else "")
-                conv = await self.create_conversation(account_id, title)
+                conv = await self.create_conversation(account_id, title, ds_id_strs)
                 conversation_id = conv.id
 
             # 发送 start 事件，携带 conversation_id
