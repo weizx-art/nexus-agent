@@ -8,9 +8,9 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from weaviate.exceptions import WeaviateBaseError
 
+from core.database import AsyncSessionLocal
 from models import Document, Segment
 from services.embedding_service import EmbeddingService
 from services.llm_service import LLMService
@@ -33,7 +33,7 @@ SYSTEM_PROMPT = """你是一个综合业务智能助手。你的职责是帮助�
 - 保持专业、友好的语气"""
 
 
-def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
+def _make_retrieval_tool(dataset_ids: list[uuid.UUID]):
     """工厂函数：创建绑定了特定知识库的检索工具"""
 
     @tool
@@ -62,7 +62,7 @@ def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
 
             all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
             top_results = all_results[:5]
-            
+
             if top_results:
                 logger.info("Top结果分数: %s", [r.get("score") for r in top_results])
 
@@ -74,9 +74,11 @@ def _make_retrieval_tool(db: AsyncSession, dataset_ids: list[uuid.UUID]):
             if not seg_ids:
                 return "未在知识库中找到相关内容。"
 
+            # 模型可能并行调用本工具，独立会话避免并发共用同一 AsyncSession
             stmt = select(Segment, Document).join(Document, Segment.document_id == Document.id).where(Segment.id.in_(seg_ids))
-            result = await db.execute(stmt)
-            seg_doc_map = {seg.id: (seg, doc) for seg, doc in result.all()}
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(stmt)
+                seg_doc_map = {seg.id: (seg, doc) for seg, doc in result.all()}
 
             segments = []
             for r in top_results:
@@ -129,7 +131,6 @@ def _build_langchain_messages(
 
 
 async def run_chat_stream(
-    db: AsyncSession,
     user_message: str,
     chat_history: list[dict],
     dataset_ids: Optional[list[uuid.UUID]] = None,
@@ -142,7 +143,7 @@ async def run_chat_stream(
     messages = _build_langchain_messages(chat_history, user_message)
 
     if dataset_ids:
-        retrieval_tool = _make_retrieval_tool(db, dataset_ids)
+        retrieval_tool = _make_retrieval_tool(dataset_ids)
         agent = create_agent(llm, [retrieval_tool], system_prompt=system_prompt)
 
         async for event in agent.astream_events(
@@ -181,7 +182,6 @@ async def run_chat_stream(
 
 
 async def run_chat(
-    db: AsyncSession,
     user_message: str,
     chat_history: list[dict],
     dataset_ids: Optional[list[uuid.UUID]] = None,
@@ -194,7 +194,7 @@ async def run_chat(
     messages = _build_langchain_messages(chat_history, user_message)
 
     if dataset_ids:
-        retrieval_tool = _make_retrieval_tool(db, dataset_ids)
+        retrieval_tool = _make_retrieval_tool(dataset_ids)
         agent = create_agent(llm, [retrieval_tool], system_prompt=system_prompt)
         result = await agent.ainvoke({"messages": messages})
 

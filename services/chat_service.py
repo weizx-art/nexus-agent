@@ -192,7 +192,7 @@ class ChatService:
 
         await self.save_user_message(conversation_id, user_message)
 
-        result = await run_chat(self.db, user_message, chat_history, dataset_ids, summary=summary)
+        result = await run_chat(user_message, chat_history, dataset_ids, summary=summary)
 
         await self.save_assistant_message(
             conversation_id,
@@ -252,7 +252,7 @@ class ChatService:
 
         answer_parts = []
         try:
-            async for sse_event in run_chat_stream(self.db, user_message, chat_history, dataset_ids, summary=summary):
+            async for sse_event in run_chat_stream(user_message, chat_history, dataset_ids, summary=summary):
                 yield sse_event
                 if sse_event.startswith("data: "):
                     try:
