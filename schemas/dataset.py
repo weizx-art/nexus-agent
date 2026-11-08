@@ -30,7 +30,7 @@ class UpdateDatasetReq(BaseModel):
     @field_validator("icon")
     @classmethod
     def _validate_icon(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not re.match(r"^https?://", v):
+        if v and not re.match(r"^https?://", v):
             raise ValueError("图标必须是合法的 URL 地址")
         return v
 
