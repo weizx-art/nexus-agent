@@ -111,6 +111,9 @@ async def update_conversation(
     if not title or not title.strip():
         from utils.exception import ValidateErrorException
         raise ValidateErrorException("标题不能为空")
+    if len(title.strip()) > 255:
+        from utils.exception import ValidateErrorException
+        raise ValidateErrorException("标题长度不能超过 255 个字符")
     service = ChatService(db)
     await service.update_conversation_title(current_user.id, conversation_id, title.strip())
     return success_message("更新成功")

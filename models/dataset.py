@@ -18,8 +18,8 @@ class Dataset(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
-    icon: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    icon: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=func.now())

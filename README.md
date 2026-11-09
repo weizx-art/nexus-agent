@@ -12,8 +12,9 @@
 ## ✨ 核心特性
 
 - **全量异步架构** — FastAPI + SQLAlchemy Async + Redis asyncio，高并发场景下保持稳定
-- **智能对话** — LangGraph ReAct Agent，支持多轮对话与工具调用
-- **流式输出** — SSE 实时推送，逐 token 展示 AI 回复
+- **智能对话** — LangChain `create_agent`，支持多轮对话与知识库检索工具调用
+- **流式输出** — SSE 实时推送，逐 token 展示 AI 回复；停止生成时已产生的部分回复也会持久化
+- **会话记忆** — 知识库选择按会话保存，切换/刷新后自动恢复；超长历史自动摘要压缩
 - **知识库引擎** — 文档上传 → 自动解析 → 智能切片 → 向量化索引 → 多策略召回
 - **混合检索** — 语义检索 + 全文检索 + 关键词匹配，灵活组合
 - **分布式锁** — Redis 锁保护并发操作，确保数据一致性
@@ -31,7 +32,7 @@
 | 向量数据库 | Weaviate 1.39 |
 | Embedding | HuggingFace `gte-multilingual-base` |
 | 文档处理 | LangChain + jieba 分词 |
-| 智能体 | LangGraph ReAct Agent |
+| 智能体 | LangChain `create_agent` |
 | LLM | OpenAI 兼容 API（DeepSeek 等） |
 
 ## 📁 项目结构
@@ -50,7 +51,8 @@ nexus-agent/
 ├── schemas/                 # Pydantic 模型
 ├── services/                # 业务逻辑
 │   ├── chat_service.py      # 对话服务
-│   ├── chat_agent.py        # LangGraph Agent
+│   ├── chat_agent.py        # LangChain Agent
+│   ├── summary_service.py   # 会话历史摘要压缩
 │   ├── llm_service.py       # LLM 调用
 │   ├── dataset_service.py   # 知识库管理
 │   ├── indexing_service.py  # 索引流水线
@@ -126,16 +128,26 @@ LLM_MODEL_NAME=deepseek-chat
 
 ## 📡 API 接口
 
+### 认证与账号
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/auth/register` | 注册账号 |
+| POST | `/api/auth/password-login` | 账号密码登录 |
+| POST | `/api/auth/logout` | 退出登录 |
+| GET | `/api/account` | 获取当前账号信息 |
+| PATCH | `/api/account` | 更新账号（昵称/密码/头像） |
+
 ### 对话
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/api/chat/conversations` | 获取会话列表 |
-| POST | `/api/chat/conversations` | 创建会话 |
 | GET | `/api/chat/conversations/:id` | 获取消息历史 |
-| POST | `/api/chat/completions/stream` | SSE 流式对话 |
 | PATCH | `/api/chat/conversations/:id` | 更新会话标题 |
 | DELETE | `/api/chat/conversations/:id` | 删除会话 |
+| POST | `/api/chat/completions` | 非流式对话 |
+| POST | `/api/chat/completions/stream` | SSE 流式对话（会话在首次发送消息时自动创建） |
 
 ### 知识库
 
@@ -147,6 +159,7 @@ LLM_MODEL_NAME=deepseek-chat
 | PATCH | `/api/datasets/:id` | 更新知识库 |
 | DELETE | `/api/datasets/:id` | 删除知识库 |
 | POST | `/api/datasets/:id/retrieval` | 召回测试 |
+| GET | `/api/datasets/:id/queries` | 召回测试历史 |
 
 ### 文档
 
@@ -154,8 +167,27 @@ LLM_MODEL_NAME=deepseek-chat
 |------|------|------|
 | POST | `/api/datasets/:id/documents` | 上传文档 |
 | GET | `/api/datasets/:id/documents` | 文档列表 |
+| GET | `/api/datasets/:id/documents/batch/:batch` | 按批次查询索引状态 |
+| GET | `/api/datasets/:id/documents/:doc_id` | 文档详情 |
 | PATCH | `/api/datasets/:id/documents/:doc_id` | 更新文档 |
 | DELETE | `/api/datasets/:id/documents/:doc_id` | 删除文档 |
+
+### 片段
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/datasets/:id/documents/:doc_id/segments` | 片段列表 |
+| POST | `/api/datasets/:id/documents/:doc_id/segments` | 新增片段 |
+| GET | `/api/datasets/:id/documents/:doc_id/segments/:seg_id` | 片段详情 |
+| PATCH | `/api/datasets/:id/documents/:doc_id/segments/:seg_id` | 更新片段（自动重新向量化） |
+| DELETE | `/api/datasets/:id/documents/:doc_id/segments/:seg_id` | 删除片段 |
+
+### 文件上传
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/upload-files/file` | 上传文件（文档源文件） |
+| POST | `/api/upload-files/image` | 上传图片（头像等） |
 
 ## 🧠 核心架构
 
@@ -164,7 +196,7 @@ LLM_MODEL_NAME=deepseek-chat
 ```
 用户输入
   ↓
-LangGraph ReAct Agent
+LangChain create_agent
   ↓
 ┌─────────────────────────────────┐
 │  1. 解析意图                     │
@@ -227,7 +259,7 @@ uv run ruff format .
 
 ## 🔗 相关项目
 
-- [nexus-web](https://github.com/weizx-art/nexus-web) — 前端项目（Vue 3 + TypeScript）
+- [nexus-web](https://github.com/weizxdev/nexus-web) — 前端项目（Vue 3 + TypeScript）
 
 ## 📄 许可证
 

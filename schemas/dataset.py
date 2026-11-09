@@ -11,7 +11,7 @@ from entity.dataset_entity import RetrievalStrategy
 # ---------------- 知识库 Dataset ----------------
 class CreateDatasetReq(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="知识库名称")
-    icon: str = Field(default="", description="图标 URL")
+    icon: str = Field(default="", max_length=500, description="图标 URL")
     description: Optional[str] = Field(default="", max_length=2000, description="描述")
 
     @field_validator("icon")
@@ -24,7 +24,7 @@ class CreateDatasetReq(BaseModel):
 
 class UpdateDatasetReq(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    icon: Optional[str] = Field(default=None)
+    icon: Optional[str] = Field(default=None, max_length=500)
     description: Optional[str] = Field(default=None, max_length=2000)
 
     @field_validator("icon")

@@ -26,7 +26,7 @@ class UpdateAccountReq(BaseModel):
     """账号信息部分更新请求（所有字段可选，至少传一个）"""
 
     name: Optional[str] = Field(default=None, min_length=3, max_length=30, description="账号名称")
-    avatar: Optional[str] = Field(default=None, description="头像 URL")
+    avatar: Optional[str] = Field(default=None, max_length=500, description="头像 URL")
     password: Optional[str] = Field(default=None, description="新密码")
 
     @field_validator("avatar")
