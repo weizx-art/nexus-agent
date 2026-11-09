@@ -226,5 +226,5 @@ class DocumentService:
         rows = (await self.db.execute(q)).all()
         stats = {doc_id: {"segment_count": 0, "hit_count": 0} for doc_id in document_ids}
         for doc_id, seg_count, hit_count in rows:
-            stats[doc_id] = {"segment_count": seg_count, "hit_count": hit_count}
+            stats[str(doc_id)] = {"segment_count": seg_count, "hit_count": hit_count}
         return stats

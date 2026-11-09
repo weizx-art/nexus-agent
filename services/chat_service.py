@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 
+import anyio
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -252,28 +253,30 @@ class ChatService:
 
         answer_parts = []
         try:
-            async for sse_event in run_chat_stream(user_message, chat_history, dataset_ids, summary=summary):
-                yield sse_event
-                if sse_event.startswith("data: "):
-                    try:
-                        data = json.loads(sse_event[6:].strip())
-                        if data.get("type") == "token" and "content" in data:
-                            answer_parts.append(data["content"])
-                    except (json.JSONDecodeError, KeyError):
-                        pass
-        except (ValueError, RuntimeError, BusinessException) as e:
-            error_msg = e.message if isinstance(e, BusinessException) else '服务异常，请稍后重试'
-            logger.error("流式对话生成阶段异常: %s", error_msg, exc_info=True)
-            yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
-
-        answer = "".join(answer_parts)
-
-        if answer:
             try:
-                await self.save_assistant_message(conversation_id, answer, token_count=len(answer))
-                await self.db.commit()
-            except SQLAlchemyError:
-                logger.warning("保存助手消息失败", exc_info=True)
+                async for sse_event in run_chat_stream(user_message, chat_history, dataset_ids, summary=summary):
+                    yield sse_event
+                    if sse_event.startswith("data: "):
+                        try:
+                            data = json.loads(sse_event[6:].strip())
+                            if data.get("type") == "token" and "content" in data:
+                                answer_parts.append(data["content"])
+                        except (json.JSONDecodeError, KeyError):
+                            pass
+            except (ValueError, RuntimeError, BusinessException) as e:
+                error_msg = e.message if isinstance(e, BusinessException) else '服务异常，请稍后重试'
+                logger.error("流式对话生成阶段异常: %s", error_msg, exc_info=True)
+                yield f"data: {json.dumps({'type': 'error', 'content': error_msg}, ensure_ascii=False)}\n\n"
+        finally:
+            # 客户端停止生成会触发取消，屏蔽取消以保存已产生的部分回复
+            answer = "".join(answer_parts)
+            if answer:
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await self.save_assistant_message(conversation_id, answer, token_count=len(answer))
+                        await self.db.commit()
+                    except SQLAlchemyError:
+                        logger.warning("保存助手消息失败", exc_info=True)
 
         # 后台异步检查并更新摘要
         task = asyncio.create_task(self._background_summarize(conversation_id))
