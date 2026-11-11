@@ -2,7 +2,7 @@ import json
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,14 +82,12 @@ async def chat_completions_stream(
 
 @router.get("/conversations")
 async def list_conversations(
-    current_page: int = Query(default=1, ge=1, description="当前页"),
-    page_size: int = Query(default=20, ge=1, le=100, description="每页条数"),
     current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取对话列表"""
+    """获取对话列表（全量返回，不分页）"""
     service = ChatService(db)
-    result = await service.list_conversations(current_user.id, current_page, page_size)
+    result = await service.list_conversations(current_user.id)
     return success_json(result)
 
 

@@ -44,24 +44,17 @@ class ChatService:
             raise NotFoundException("对话不存在")
         return conv
 
-    async def list_conversations(self, account_id: uuid.UUID, current_page: int, page_size: int) -> dict:
-        q = select(Conversation).where(Conversation.account_id == account_id)
-        count_q = select(func.count()).select_from(q.subquery())
-        total = (await self.db.execute(count_q)).scalar() or 0
-
-        rows_q = q.order_by(desc(Conversation.updated_at)).offset((current_page - 1) * page_size).limit(page_size)
-        rows = (await self.db.execute(rows_q)).scalars().all()
+    async def list_conversations(self, account_id: uuid.UUID) -> list[dict]:
+        """返回该账号的全部对话（不分页），按创建时间倒序"""
+        result = await self.db.execute(
+            select(Conversation)
+            .where(Conversation.account_id == account_id)
+            .order_by(desc(Conversation.created_at), desc(Conversation.id))
+        )
+        rows = result.scalars().all()
 
         if not rows:
-            return {
-                "items": [],
-                "paginator": {
-                    "current_page": current_page,
-                    "page_size": page_size,
-                    "total": total,
-                    "total_pages": 0,
-                },
-            }
+            return []
 
         # 批量查询消息计数，避免 N+1
         conv_ids = [conv.id for conv in rows]
@@ -73,26 +66,17 @@ class ChatService:
         msg_count_result = await self.db.execute(msg_count_q)
         msg_counts = {row.conversation_id: row.count for row in msg_count_result.all()}
 
-        items = []
-        for conv in rows:
-            items.append({
+        return [
+            {
                 "id": str(conv.id),
                 "title": conv.title,
                 "message_count": msg_counts.get(conv.id, 0),
                 "dataset_ids": conv.dataset_ids or [],
                 "created_at": conv.created_at.isoformat(),
                 "updated_at": conv.updated_at.isoformat(),
-            })
-
-        return {
-            "items": items,
-            "paginator": {
-                "current_page": current_page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": (total + page_size - 1) // page_size,
-            },
-        }
+            }
+            for conv in rows
+        ]
 
     async def delete_conversation(self, account_id: uuid.UUID, conversation_id: uuid.UUID):
         await self.get_conversation(account_id, conversation_id)
