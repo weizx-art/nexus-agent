@@ -156,6 +156,9 @@ class ChatService:
         content: str,
         context: list[dict] | None = None,
         token_count: int = 0,
+        retrieval_strategy: str | None = None,
+        retrieval_k: int | None = None,
+        retrieval_score: float | None = None,
     ) -> Message:
         msg = Message(
             conversation_id=conversation_id,
@@ -163,6 +166,9 @@ class ChatService:
             content=content,
             context=json.dumps(context, ensure_ascii=False) if context else None,
             token_count=token_count,
+            retrieval_strategy=retrieval_strategy,
+            retrieval_k=retrieval_k,
+            retrieval_score=retrieval_score,
         )
         self.db.add(msg)
         await self.db.flush()
@@ -212,6 +218,9 @@ class ChatService:
             result["answer"],
             context=result.get("context"),
             token_count=len(result["answer"]),
+            retrieval_strategy=retrieval_strategy if dataset_ids else None,
+            retrieval_k=retrieval_k if dataset_ids else None,
+            retrieval_score=retrieval_score if dataset_ids else None,
         )
 
         async with auto_commit(self.db):
@@ -296,7 +305,14 @@ class ChatService:
             if answer:
                 with anyio.CancelScope(shield=True):
                     try:
-                        await self.save_assistant_message(conversation_id, answer, token_count=len(answer))
+                        await self.save_assistant_message(
+                            conversation_id,
+                            answer,
+                            token_count=len(answer),
+                            retrieval_strategy=retrieval_strategy if dataset_ids else None,
+                            retrieval_k=retrieval_k if dataset_ids else None,
+                            retrieval_score=retrieval_score if dataset_ids else None,
+                        )
                         await self.db.commit()
                     except SQLAlchemyError:
                         logger.warning("保存助手消息失败", exc_info=True)
@@ -338,5 +354,8 @@ class ChatService:
             "content": msg.content,
             "context": context,
             "token_count": msg.token_count,
+            "retrieval_strategy": msg.retrieval_strategy,
+            "retrieval_k": msg.retrieval_k,
+            "retrieval_score": msg.retrieval_score,
             "created_at": msg.created_at.isoformat(),
         }
