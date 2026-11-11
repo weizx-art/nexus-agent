@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import uuid
@@ -7,14 +6,13 @@ from typing import AsyncGenerator, Optional
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
-from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from weaviate.exceptions import WeaviateBaseError
 
 from core.database import AsyncSessionLocal
-from models import Document, Segment
-from services.embedding_service import EmbeddingService
+from entity.dataset_entity import RetrievalStrategy
 from services.llm_service import LLMService
-from services.vector_service import VectorService
+from services.retrieval_service import RetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -33,77 +31,43 @@ SYSTEM_PROMPT = """你是一个综合业务智能助手。你的职责是帮助�
 - 保持专业、友好的语气"""
 
 
-def _make_retrieval_tool(dataset_ids: list[uuid.UUID]):
-    """工厂函数：创建绑定了特定知识库的检索工具"""
+def _make_retrieval_tool(
+    dataset_ids: list[uuid.UUID],
+    strategy: str = RetrievalStrategy.SEMANTIC,
+    k: int = 5,
+    score_threshold: float = 0.0,
+):
+    """工厂函数：创建绑定了知识库与检索策略的检索工具"""
 
     @tool
     async def knowledge_retrieval(query: str) -> str:
         """从用户选择的知识库中检索相关内容。当有知识库可用时，必须调用此工具获取参考信息后再回答用户问题。"""
         try:
-            logger.info("知识库检索开始，query: %s, dataset_ids: %s", query[:100], dataset_ids)
-            query_vector = await EmbeddingService.embed_query(query)
-
-            # 并行检索多个知识库
-            tasks = [
-                VectorService.search(query_vector, str(ds_id), k=5, score_threshold=0.0)
-                for ds_id in dataset_ids
-            ]
-            results_list = await asyncio.gather(*tasks, return_exceptions=True)
-
-            all_results = []
-            for ds_id, results in zip(dataset_ids, results_list):
-                if isinstance(results, Exception):
-                    logger.warning("知识库 %s 检索失败: %s", ds_id, results)
-                    continue
-                logger.info("知识库 %s 检索到 %d 条结果", ds_id, len(results))
-                for r in results:
-                    r["dataset_id"] = str(ds_id)
-                all_results.extend(results)
-
-            all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
-            top_results = all_results[:5]
-
-            if top_results:
-                logger.info("Top结果分数: %s", [r.get("score") for r in top_results])
-
-            if not top_results:
-                logger.info("知识库未找到相关内容")
-                return "未在知识库中找到相关内容。"
-
-            seg_ids = [uuid.UUID(r["segment_id"]) for r in top_results if r.get("segment_id")]
-            if not seg_ids:
-                return "未在知识库中找到相关内容。"
-
-            # 模型可能并行调用本工具，独立会话避免并发共用同一 AsyncSession
-            stmt = select(Segment, Document).join(Document, Segment.document_id == Document.id).where(Segment.id.in_(seg_ids))
+            logger.info("知识库检索开始，strategy: %s, query: %s, dataset_ids: %s", strategy, query[:100], dataset_ids)
+            # 独立会话：模型可能并行调用本工具，避免并发共用同一 AsyncSession
             async with AsyncSessionLocal() as session:
-                result = await session.execute(stmt)
-                seg_doc_map = {seg.id: (seg, doc) for seg, doc in result.all()}
-
-            segments = []
-            for r in top_results:
-                seg_id = r.get("segment_id")
-                if seg_id and uuid.UUID(seg_id) in seg_doc_map:
-                    seg, doc = seg_doc_map[uuid.UUID(seg_id)]
-                    segments.append({
-                        "content": seg.content,
-                        "source": doc.name if doc else "未知文档",
-                        "score": round(r.get("score", 0), 3),
-                    })
-
-            if not segments:
-                logger.info("数据库未找到对应的分段记录")
-                return "未在知识库中找到相关内容。"
-
-            logger.info("最终返回 %d 条参考内容", len(segments))
-            parts = []
-            for i, s in enumerate(segments, 1):
-                parts.append(f"【参考{i}】来源: {s['source']}（相关度: {s['score']}）\n{s['content']}")
-            return "\n\n".join(parts)
-
-        except (WeaviateBaseError, ValueError) as e:
-            logger.warning("知识库检索失败: %s", e)
+                results = await RetrievalService.search(
+                    session,
+                    dataset_ids,
+                    query,
+                    strategy=strategy,
+                    k=k,
+                    score_threshold=score_threshold,
+                )
+        except (WeaviateBaseError, SQLAlchemyError, ValueError) as e:
+            logger.warning("知识库检索失败: %s", e, exc_info=True)
             return f"知识库检索出错: {e}"
+
+        if not results:
+            logger.info("知识库未找到相关内容")
+            return "未在知识库中找到相关内容。"
+
+        logger.info("最终返回 %d 条参考内容", len(results))
+        parts = [
+            f"【参考{i}】来源: {item['document_name'] or '未知文档'}（相关度: {item['score']}）\n{item['content']}"
+            for i, item in enumerate(results, 1)
+        ]
+        return "\n\n".join(parts)
 
     return knowledge_retrieval
 
@@ -135,6 +99,9 @@ async def run_chat_stream(
     chat_history: list[dict],
     dataset_ids: Optional[list[uuid.UUID]] = None,
     summary: Optional[str] = None,
+    retrieval_strategy: str = RetrievalStrategy.SEMANTIC,
+    retrieval_k: int = 5,
+    retrieval_score: float = 0.0,
 ) -> AsyncGenerator[str, None]:
     """执行流式对话，yield SSE 格式的 token"""
 
@@ -143,7 +110,9 @@ async def run_chat_stream(
     messages = _build_langchain_messages(chat_history, user_message)
 
     if dataset_ids:
-        retrieval_tool = _make_retrieval_tool(dataset_ids)
+        retrieval_tool = _make_retrieval_tool(
+            dataset_ids, retrieval_strategy, k=retrieval_k, score_threshold=retrieval_score
+        )
         agent = create_agent(llm, [retrieval_tool], system_prompt=system_prompt)
 
         async for event in agent.astream_events(
@@ -186,6 +155,9 @@ async def run_chat(
     chat_history: list[dict],
     dataset_ids: Optional[list[uuid.UUID]] = None,
     summary: Optional[str] = None,
+    retrieval_strategy: str = RetrievalStrategy.SEMANTIC,
+    retrieval_k: int = 5,
+    retrieval_score: float = 0.0,
 ) -> dict:
     """执行非流式对话，返回完整响应"""
 
@@ -194,7 +166,9 @@ async def run_chat(
     messages = _build_langchain_messages(chat_history, user_message)
 
     if dataset_ids:
-        retrieval_tool = _make_retrieval_tool(dataset_ids)
+        retrieval_tool = _make_retrieval_tool(
+            dataset_ids, retrieval_strategy, k=retrieval_k, score_threshold=retrieval_score
+        )
         agent = create_agent(llm, [retrieval_tool], system_prompt=system_prompt)
         result = await agent.ainvoke({"messages": messages})
 

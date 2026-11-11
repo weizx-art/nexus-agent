@@ -11,9 +11,8 @@ from entity.dataset_entity import DEFAULT_DATASET_DESCRIPTION, RetrievalSource
 from utils.exception import NotFoundException, ValidateErrorException
 from models import Dataset, DatasetQuery, Document, KeywordTable, ProcessRule, Segment
 from schemas.common import PageData, make_paginator
-from services.embedding_service import EmbeddingService
-from services.jieba_service import JiebaService
 from services.keyword_table_service import KeywordTableService
+from services.retrieval_service import RetrievalService
 from services.vector_service import VectorService
 
 logger = logging.getLogger(__name__)
@@ -145,62 +144,21 @@ class DatasetService:
     # ---------- 召回测试 ----------
     async def hit(self, account_id, dataset_id, req) -> list[dict]:
         await self.get_dataset(account_id, dataset_id)
-        strategy = req.retrieval_strategy
         k = req.k
-        score_threshold = req.score
 
-        results: dict[str, dict] = {}
-
-        if strategy in ("semantic", "hybrid"):
-            await self._semantic_recall(str(dataset_id), req.query, k, score_threshold, results)
-
-        if strategy in ("full_text", "hybrid"):
-            await self._full_text_recall(str(dataset_id), req.query, k, results)
+        items = await RetrievalService.search(
+            self.db,
+            [dataset_id],
+            req.query,
+            strategy=req.retrieval_strategy,
+            k=k,
+            score_threshold=req.score,
+        )
+        results: dict[str, dict] = {item["segment_id"]: item for item in items}
 
         await self._enrich_hit_results(results, dataset_id, req.query, k)
 
         return sorted(results.values(), key=lambda x: x["score"], reverse=True)[:k]
-
-    async def _semantic_recall(self, dataset_id: str, query: str, k: int, score_threshold: float, results: dict):
-        """向量召回"""
-        try:
-            query_vector = await EmbeddingService.embed_query(query)
-            for r in await VectorService.search(query_vector, dataset_id, k=k, score_threshold=score_threshold):
-                sid = r["segment_id"]
-                if sid and sid not in results:
-                    results[sid] = r
-        except (WeaviateBaseError, ValueError) as e:
-            logger.warning("向量召回失败: %s", e)
-
-    async def _full_text_recall(self, dataset_id: str, query: str, k: int, results: dict):
-        """关键词召回（TF-IDF 提取关键词 + 倒排表匹配）"""
-        keywords = JiebaService.extract_keywords(query, top_k=10)
-        if not keywords:
-            return
-        hit_ids = await KeywordTableService(self.db).search_segment_ids(dataset_id, keywords)
-        if not hit_ids:
-            return
-        result = await self.db.execute(
-            select(Segment, Document.name)
-            .join(Document, Segment.document_id == Document.id)
-            .where(
-                Segment.dataset_id == dataset_id,
-                Segment.enabled.is_(True),
-                Segment.id.in_(hit_ids),
-            )
-        )
-        for seg, doc_name in result.all():
-            matched = sum(1 for kw in keywords if kw in (seg.keywords or []))
-            score = round(matched / len(keywords), 3) if keywords else 0
-            sid = str(seg.id)
-            if score > 0 and sid not in results:
-                results[sid] = {
-                    "score": score,
-                    "segment_id": sid,
-                    "content": seg.content,
-                    "document_id": str(seg.document_id),
-                    "document_name": doc_name,
-                }
 
     async def _enrich_hit_results(self, results: dict, dataset_id, query: str, k: int):
         """补全 segment 详情字段、累加 hit_count、记录查询"""

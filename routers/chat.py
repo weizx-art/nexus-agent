@@ -33,6 +33,9 @@ async def chat_completions(
         user_message=req.message,
         conversation_id=req.conversation_id,
         dataset_ids=req.dataset_ids,
+        retrieval_strategy=req.retrieval_strategy,
+        retrieval_k=req.retrieval_k,
+        retrieval_score=req.retrieval_score,
     )
     return success_json(result)
 
@@ -53,6 +56,9 @@ async def chat_completions_stream(
                 user_message=req.message,
                 conversation_id=req.conversation_id,
                 dataset_ids=req.dataset_ids,
+                retrieval_strategy=req.retrieval_strategy,
+                retrieval_k=req.retrieval_k,
+                retrieval_score=req.retrieval_score,
             ):
                 yield sse_data
         except (SQLAlchemyError, BusinessException, ValueError, RuntimeError) as e:

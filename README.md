@@ -114,7 +114,9 @@ uv run python scripts/seed.py
 
 该脚本会重置数据库并生成完整链路测试数据：
 - 管理员账号：`admin` / `admin123`
-- 50 个知识库、150 个文档、750 个片段及对应的向量数据
+- 50 个知识库、150 个文档、750 个片段、对应的向量数据，以及每个知识库的关键词倒排表
+
+> 关键词倒排表是 `full_text` / `hybrid` 策略的召回来源，缺失时这两种策略会返回空结果。
 
 ### 5. 配置 LLM
 
@@ -146,8 +148,8 @@ LLM_MODEL_NAME=deepseek-chat
 | GET | `/api/chat/conversations/:id` | 获取消息历史 |
 | PATCH | `/api/chat/conversations/:id` | 更新会话标题 |
 | DELETE | `/api/chat/conversations/:id` | 删除会话 |
-| POST | `/api/chat/completions` | 非流式对话 |
-| POST | `/api/chat/completions/stream` | SSE 流式对话（会话在首次发送消息时自动创建） |
+| POST | `/api/chat/completions` | 非流式对话（可传 `retrieval_strategy` / `retrieval_k` / `retrieval_score`） |
+| POST | `/api/chat/completions/stream` | SSE 流式对话（会话自动创建，可传 `retrieval_strategy` / `retrieval_k` / `retrieval_score`） |
 
 ### 知识库
 
@@ -225,11 +227,27 @@ SSE 推送 → 前端实时展示
 
 ### 检索策略
 
+召回测试（`POST /api/datasets/:id/retrieval`）与对话（`POST /api/chat/completions`、
+`/completions/stream` 的 `retrieval_strategy`、`retrieval_k`、`retrieval_score` 字段）共用 `RetrievalService`：
+
 | 策略 | 说明 |
 |------|------|
-| `semantic` | Weaviate 向量近邻搜索 |
+| `semantic` | Weaviate 向量近邻搜索（对话默认） |
 | `full_text` | jieba 关键词 + 倒排表匹配 |
-| `hybrid` | 两者融合，按分数排序 |
+| `hybrid` | 两路分数按 0.6 / 0.4 加权，统一排序（召回测试默认） |
+
+两路召回都会在数据库层校验 `document.enabled` 与 `segment.enabled`，
+停用的文档/分段不会出现在结果中。
+
+对话侧三个参数的默认值与取值范围：
+
+| 参数 | 默认 | 范围 | 说明 |
+|------|------|------|------|
+| `retrieval_strategy` | `semantic` | `semantic` / `full_text` / `hybrid` | 保持老客户端行为不变 |
+| `retrieval_k` | `5` | 1 ~ 10 | 最终交给模型的片段上限，多知识库合并后仍按此截断 |
+| `retrieval_score` | `0.0` | 0 ~ 0.99 | 低于阈值的片段被丢弃；`semantic` 按余弦相似度，`full_text` 按关键词命中率 |
+
+这三个参数按请求生效、不落库：同一会话内每轮可以不同，历史消息不记录当时用的策略。
 
 ## ⚙️ 配置参考
 

@@ -57,6 +57,7 @@ async def main():
     from models import Account, Dataset, Document, Segment
     from utils.security import generate_password_salt_and_hash
     from services.embedding_service import EmbeddingService
+    from services.keyword_table_service import KeywordTableService
     from services.vector_service import VectorService
 
     logger.info("=" * 60)
@@ -119,6 +120,7 @@ async def main():
             )
             db.add(dataset)
             await db.flush()
+            dataset_segment_ids: list[str] = []
 
             # 为每个知识库创建 3 个文档
             for doc_idx, doc_template in enumerate(DOCUMENT_TEMPLATES, 1):
@@ -166,6 +168,7 @@ async def main():
                     )
                     db.add(segment)
                     await db.flush()
+                    dataset_segment_ids.append(str(segment.id))
                     total_segments += 1
 
                     # 生成 embedding 并存入 Weaviate
@@ -186,6 +189,9 @@ async def main():
                         )
                     except Exception as e:
                         logger.warning(f"片段 {segment.id} 向量化失败: {e}")
+
+            # 构建关键词倒排表，供 full_text / hybrid 策略召回
+            await KeywordTableService(db).add_keyword_table_from_ids(dataset.id, dataset_segment_ids)
 
             if ds_idx % 10 == 0:
                 logger.info(f"  进度: {ds_idx}/{total_datasets} 个知识库")

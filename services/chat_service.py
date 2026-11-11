@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import auto_commit
+from entity.dataset_entity import RetrievalStrategy
 from models import Conversation, Dataset, Message
 from services.chat_agent import run_chat, run_chat_stream
 from services.summary_service import SummaryService, RECENT_TURNS
@@ -175,6 +176,9 @@ class ChatService:
         user_message: str,
         conversation_id: uuid.UUID | None = None,
         dataset_ids: list[uuid.UUID] | None = None,
+        retrieval_strategy: str = RetrievalStrategy.SEMANTIC,
+        retrieval_k: int = 5,
+        retrieval_score: float = 0.0,
     ) -> dict:
         """非流式对话"""
         if dataset_ids:
@@ -193,7 +197,15 @@ class ChatService:
 
         await self.save_user_message(conversation_id, user_message)
 
-        result = await run_chat(user_message, chat_history, dataset_ids, summary=summary)
+        result = await run_chat(
+            user_message,
+            chat_history,
+            dataset_ids,
+            summary=summary,
+            retrieval_strategy=retrieval_strategy,
+            retrieval_k=retrieval_k,
+            retrieval_score=retrieval_score,
+        )
 
         await self.save_assistant_message(
             conversation_id,
@@ -223,6 +235,9 @@ class ChatService:
         user_message: str,
         conversation_id: uuid.UUID | None = None,
         dataset_ids: list[uuid.UUID] | None = None,
+        retrieval_strategy: str = RetrievalStrategy.SEMANTIC,
+        retrieval_k: int = 5,
+        retrieval_score: float = 0.0,
     ):
         """流式对话，返回 SSE 事件生成器"""
         try:
@@ -254,7 +269,15 @@ class ChatService:
         answer_parts = []
         try:
             try:
-                async for sse_event in run_chat_stream(user_message, chat_history, dataset_ids, summary=summary):
+                async for sse_event in run_chat_stream(
+                    user_message,
+                    chat_history,
+                    dataset_ids,
+                    summary=summary,
+                    retrieval_strategy=retrieval_strategy,
+                    retrieval_k=retrieval_k,
+                    retrieval_score=retrieval_score,
+                ):
                     yield sse_event
                     if sse_event.startswith("data: "):
                         try:
