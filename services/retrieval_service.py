@@ -65,11 +65,13 @@ class RetrievalService:
             semantic: list[dict] = []
             full_text: list[dict] = []
             if query_vector:
-                semantic = await cls._semantic_recall(query_vector, ds_id, k, score_threshold)
+                semantic = await cls._semantic_recall(query_vector, ds_id, k, 0.0)
             if keywords:
-                full_text = await cls._full_text_recall(db, ds_id, keywords, k, score_threshold)
+                full_text = await cls._full_text_recall(db, ds_id, keywords, k, 0.0)
 
             for item in cls._fuse(semantic, full_text, strategy):
+                if item["score"] < score_threshold:
+                    continue
                 sid = item["segment_id"]
                 current = merged.get(sid)
                 if current is None or item["score"] > current["score"]:

@@ -203,6 +203,7 @@ class ChatService:
 
         await self.save_user_message(conversation_id, user_message)
 
+        retrieval_context: dict = {"context": []}
         result = await run_chat(
             user_message,
             chat_history,
@@ -211,12 +212,13 @@ class ChatService:
             retrieval_strategy=retrieval_strategy,
             retrieval_k=retrieval_k,
             retrieval_score=retrieval_score,
+            context_holder=retrieval_context,
         )
 
         await self.save_assistant_message(
             conversation_id,
             result["answer"],
-            context=result.get("context"),
+            context=retrieval_context.get("context") or result.get("context"),
             token_count=len(result["answer"]),
             retrieval_strategy=retrieval_strategy if dataset_ids else None,
             retrieval_k=retrieval_k if dataset_ids else None,
@@ -276,6 +278,7 @@ class ChatService:
             return
 
         answer_parts = []
+        retrieval_context: dict = {"context": []}
         try:
             try:
                 async for sse_event in run_chat_stream(
@@ -286,6 +289,7 @@ class ChatService:
                     retrieval_strategy=retrieval_strategy,
                     retrieval_k=retrieval_k,
                     retrieval_score=retrieval_score,
+                    context_holder=retrieval_context,
                 ):
                     yield sse_event
                     if sse_event.startswith("data: "):
@@ -308,6 +312,7 @@ class ChatService:
                         await self.save_assistant_message(
                             conversation_id,
                             answer,
+                            context=retrieval_context.get("context"),
                             token_count=len(answer),
                             retrieval_strategy=retrieval_strategy if dataset_ids else None,
                             retrieval_k=retrieval_k if dataset_ids else None,

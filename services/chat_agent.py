@@ -36,6 +36,7 @@ def _make_retrieval_tool(
     strategy: str = RetrievalStrategy.SEMANTIC,
     k: int = 5,
     score_threshold: float = 0.0,
+    context_holder: Optional[dict] = None,
 ):
     """工厂函数：创建绑定了知识库与检索策略的检索工具"""
 
@@ -63,6 +64,19 @@ def _make_retrieval_tool(
             return "未在知识库中找到相关内容。"
 
         logger.info("最终返回 %d 条参考内容", len(results))
+        if context_holder is not None:
+            context = context_holder.setdefault("context", [])
+            for item in results:
+                citation = {
+                    "content": item.get("content") or "",
+                    "source": item.get("document_name") or "未知文档",
+                    "score": item.get("score", 0.0),
+                }
+                if not any(
+                    c["content"] == citation["content"] and c["source"] == citation["source"]
+                    for c in context
+                ):
+                    context.append(citation)
         parts = [
             f"【参考{i}】来源: {item['document_name'] or '未知文档'}（相关度: {item['score']}）\n{item['content']}"
             for i, item in enumerate(results, 1)
@@ -94,6 +108,35 @@ def _build_langchain_messages(
     return messages
 
 
+async def _stream_agent_events(agent, messages: list) -> AsyncGenerator[str, None]:
+    """按 LangGraph 的 messages / updates 流模式转发 SSE 事件"""
+    async for mode, data in agent.astream(
+        {"messages": messages},
+        stream_mode=["messages", "updates"],
+    ):
+        if mode == "messages":
+            chunk, metadata = data
+            if metadata.get("langgraph_node") != "model":
+                continue
+            text = getattr(chunk, "text", "")
+            if text:
+                yield _sse_data({"type": "token", "content": text})
+        elif mode == "updates":
+            for node, update in data.items():
+                msgs = update.get("messages") if isinstance(update, dict) else None
+                if not msgs:
+                    continue
+                last = msgs[-1]
+                if node == "model" and getattr(last, "tool_calls", None):
+                    for call in last.tool_calls:
+                        yield _sse_data({"type": "tool_call", "tool": call.get("name", ""), "status": "calling"})
+                elif node == "tools":
+                    output = last.content if hasattr(last, "content") else str(last)
+                    output = output if isinstance(output, str) else str(output)
+                    preview = output[:200] + "..." if len(output) > 200 else output
+                    yield _sse_data({"type": "tool_result", "content": preview})
+
+
 async def run_chat_stream(
     user_message: str,
     chat_history: list[dict],
@@ -102,6 +145,7 @@ async def run_chat_stream(
     retrieval_strategy: str = RetrievalStrategy.SEMANTIC,
     retrieval_k: int = 5,
     retrieval_score: float = 0.0,
+    context_holder: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     """执行流式对话，yield SSE 格式的 token"""
 
@@ -111,41 +155,23 @@ async def run_chat_stream(
 
     if dataset_ids:
         retrieval_tool = _make_retrieval_tool(
-            dataset_ids, retrieval_strategy, k=retrieval_k, score_threshold=retrieval_score
+            dataset_ids,
+            retrieval_strategy,
+            k=retrieval_k,
+            score_threshold=retrieval_score,
+            context_holder=context_holder,
         )
         agent = create_agent(llm, [retrieval_tool], system_prompt=system_prompt)
 
-        async for event in agent.astream_events(
-            {"messages": messages},
-            version="v2",
-        ):
-            kind = event.get("event", "")
-            if kind == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk", None)
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    yield _sse_data({"type": "token", "content": chunk.content})
-            elif kind == "on_tool_start":
-                tool_name = event.get("name", "")
-                yield _sse_data({"type": "tool_call", "tool": tool_name, "status": "calling"})
-            elif kind == "on_tool_end":
-                raw_output = event.get("data", {}).get("output", "")
-                tool_output = raw_output.content if hasattr(raw_output, "content") else str(raw_output)
-                preview = tool_output[:200] + "..." if len(tool_output) > 200 else tool_output
-                yield _sse_data({"type": "tool_result", "content": preview})
+        async for sse in _stream_agent_events(agent, messages):
+            yield sse
 
         yield _sse_data({"type": "done"})
     else:
         agent = create_agent(llm, tools=[], system_prompt=system_prompt)
 
-        async for event in agent.astream_events(
-            {"messages": messages},
-            version="v2",
-        ):
-            kind = event.get("event", "")
-            if kind == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk", None)
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    yield _sse_data({"type": "token", "content": chunk.content})
+        async for sse in _stream_agent_events(agent, messages):
+            yield sse
 
         yield _sse_data({"type": "done"})
 
@@ -158,6 +184,7 @@ async def run_chat(
     retrieval_strategy: str = RetrievalStrategy.SEMANTIC,
     retrieval_k: int = 5,
     retrieval_score: float = 0.0,
+    context_holder: Optional[dict] = None,
 ) -> dict:
     """执行非流式对话，返回完整响应"""
 
@@ -167,7 +194,11 @@ async def run_chat(
 
     if dataset_ids:
         retrieval_tool = _make_retrieval_tool(
-            dataset_ids, retrieval_strategy, k=retrieval_k, score_threshold=retrieval_score
+            dataset_ids,
+            retrieval_strategy,
+            k=retrieval_k,
+            score_threshold=retrieval_score,
+            context_holder=context_holder,
         )
         agent = create_agent(llm, [retrieval_tool], system_prompt=system_prompt)
         result = await agent.ainvoke({"messages": messages})
@@ -186,6 +217,8 @@ async def run_chat(
                     if tc.get("name") == "knowledge_retrieval":
                         context_parts.append(tc.get("args", {}))
 
+        if context_holder and context_holder.get("context"):
+            context_parts = context_holder["context"]
         return {"answer": answer, "context": context_parts}
     else:
         agent = create_agent(llm, tools=[], system_prompt=system_prompt)
