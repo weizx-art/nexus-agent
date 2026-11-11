@@ -14,7 +14,8 @@
 - **全量异步架构** — FastAPI + SQLAlchemy Async + Redis asyncio，高并发场景下保持稳定
 - **智能对话** — LangChain `create_agent`，支持多轮对话与知识库检索工具调用
 - **流式输出** — SSE 实时推送，逐 token 展示 AI 回复；停止生成时已产生的部分回复也会持久化
-- **会话记忆** — 知识库选择按会话保存，切换/刷新后自动恢复；超长历史自动摘要压缩
+- **会话记忆** — 超长历史自动摘要压缩；知识库选择保存在浏览器本地，切换会话/刷新后保留，新建对话时清空
+- **引用来源** — 每次回答保存引用的片段（内容/来源/相关度）与当次检索策略、k、阈值，历史消息可回看
 - **知识库引擎** — 文档上传 → 自动解析 → 智能切片 → 向量化索引 → 多策略召回
 - **混合检索** — 语义检索 + 全文检索 + 关键词匹配，灵活组合
 - **分布式锁** — Redis 锁保护并发操作，确保数据一致性
@@ -51,7 +52,9 @@ nexus-agent/
 ├── schemas/                 # Pydantic 模型
 ├── services/                # 业务逻辑
 │   ├── chat_service.py      # 对话服务
-│   ├── chat_agent.py        # LangChain Agent
+│   ├── chat_agent.py        # LangChain Agent（检索工具 + 流式事件）
+│   ├── retrieval_service.py # 三策略统一检索（语义/全文/混合）
+│   ├── keyword_table_service.py # 关键词倒排表
 │   ├── summary_service.py   # 会话历史摘要压缩
 │   ├── llm_service.py       # LLM 调用
 │   ├── dataset_service.py   # 知识库管理
@@ -125,7 +128,7 @@ uv run python scripts/seed.py
 ```bash
 LLM_API_KEY=your-api-key
 LLM_API_BASE=https://api.deepseek.com  # 或其他 OpenAI 兼容 API
-LLM_MODEL_NAME=deepseek-chat
+LLM_MODEL_NAME=deepseek-v4-flash
 ```
 
 ## 📡 API 接口
@@ -245,9 +248,10 @@ SSE 推送 → 前端实时展示
 |------|------|------|------|
 | `retrieval_strategy` | `semantic` | `semantic` / `full_text` / `hybrid` | 保持老客户端行为不变 |
 | `retrieval_k` | `5` | 1 ~ 10 | 最终交给模型的片段上限，多知识库合并后仍按此截断 |
-| `retrieval_score` | `0.0` | 0 ~ 0.99 | 低于阈值的片段被丢弃；`semantic` 按余弦相似度，`full_text` 按关键词命中率 |
+| `retrieval_score` | `0.0` | 0 ~ 0.99 | 低于阈值的片段被丢弃；`semantic` 按余弦相似度，`full_text` 按关键词命中率，`hybrid` 按 0.6/0.4 加权后的最终分 |
 
-这三个参数按请求生效、不落库：同一会话内每轮可以不同，历史消息不记录当时用的策略。
+这三个参数按请求生效：同一会话内每轮可以不同。每次回答会把当次策略、k、阈值与引用片段
+（内容/来源/相关度）写入消息记录，历史消息可回看引用来源。
 
 ## ⚙️ 配置参考
 
@@ -259,7 +263,7 @@ SSE 推送 → 前端实时展示
 | `WEAVIATE_URL` | Weaviate 地址 | `http://localhost:8080` |
 | `REDIS_HOST` | Redis 地址 | `localhost` |
 | `LLM_API_BASE` | LLM API 地址 | `https://api.deepseek.com` |
-| `LLM_MODEL_NAME` | LLM 模型名 | `deepseek-chat` |
+| `LLM_MODEL_NAME` | LLM 模型名 | `deepseek-v4-flash` |
 | `EMBEDDING_MODEL_NAME` | Embedding 模型 | `Alibaba-NLP/gte-multilingual-base` |
 
 ## 📝 开发
