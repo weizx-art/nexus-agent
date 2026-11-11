@@ -39,7 +39,7 @@ class MessageOut(BaseModel):
     conversation_id: str
     role: str
     content: str
-    context: Optional[list[dict]] = None
+    context: Optional[list[dict]] = Field(default=None, description="引用片段列表，元素含 content/source/score")
     token_count: int = 0
     created_at: datetime
 
@@ -50,5 +50,5 @@ class ChatResponseOut(BaseModel):
     conversation_id: str
     message_id: str
     content: str
-    context: Optional[list[dict]] = None
+    context: Optional[list[dict]] = Field(default=None, description="引用片段列表，元素含 content/source/score")
     token_count: int = 0

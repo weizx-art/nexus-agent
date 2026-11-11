@@ -41,7 +41,7 @@ class Message(Base):
     conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)  # user / assistant / system
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # 知识库引用上下文（RAG 检索到的片段信息，JSON 格式）
+    # 引用片段快照：JSON 字符串，读取后转换为 [{content, source, score}]
     context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retrieval_strategy: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)

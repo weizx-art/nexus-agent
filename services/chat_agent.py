@@ -177,7 +177,7 @@ async def run_chat_stream(
     retrieval_score: float = 0.0,
     context_holder: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
-    """执行流式对话，yield SSE 格式的 token"""
+    """执行流式对话，yield SSE 格式的流式事件（token / tool_call / tool_result / done）"""
 
     llm = LLMService.get_streaming_llm()
     system_prompt = _build_system_prompt(SYSTEM_PROMPT, summary)
